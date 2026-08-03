@@ -153,7 +153,7 @@ def main(
     # If no list provided, fetch the most recent ones
     if activities_list is None:
         print("Fetching activities from Garmin Connect...")
-        activities_list = get_runs(N=10)
+        activities_list = get_runs(N=500)
 
     if not activities_list:
         print("No activities to process.")
