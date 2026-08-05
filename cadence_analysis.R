@@ -26,6 +26,9 @@ marker_date     <- as.POSIXct("2026-04-25", tz = "UTC")
 # downsampling: max points per panel
 max_pts_per_panel <- 200
 
+# number of equidistant time bins for the cadence-average markers
+n_time_bins <- 5
+
 # fixed 4-panel pace ranges ---
 # each entry: list(label, lo, hi)  (lo inclusive, hi exclusive except last)
 pace_panels <- list(
@@ -93,6 +96,46 @@ plot_df <- filtered_df %>%
 
 cat(sprintf("Downsampled to %d total points across 4 panels.\n", nrow(plot_df)))
 
+# --- Build per-panel bin-average markers ---
+# For each panel: fit LOESS on the full (non-downsampled) data, divide the
+# date range into n_time_bins equal-width bins, compute the mean observed
+# cadence per bin, then place the label at the LOESS-predicted y so it sits
+# neatly on the trend curve.
+
+build_bin_markers <- function(panel_data, n_bins) {
+  if (nrow(panel_data) < 4) return(NULL)
+
+  x_num  <- as.numeric(panel_data$date)
+  y      <- panel_data$avg_cadence
+
+  lo_fit <- loess(y ~ x_num, span = 0.75)
+
+  date_min <- min(x_num)
+  date_max <- max(x_num)
+  breaks   <- seq(date_min, date_max, length.out = n_bins + 1)
+
+  do.call(rbind, lapply(seq_len(n_bins), function(i) {
+    in_bin     <- x_num >= breaks[i] & x_num < breaks[i + 1]
+    if (sum(in_bin) < 2) return(NULL)
+    mid_x      <- (breaks[i] + breaks[i + 1]) / 2
+    mean_obs   <- mean(y[in_bin])
+    fit_y      <- tryCatch(predict(lo_fit, newdata = data.frame(x_num = mid_x)),
+                           error = function(e) mean_obs)
+    data.frame(
+      mid_date   = as.POSIXct(mid_x, origin = "1970-01-01"),
+      mean_cad   = round(mean_obs),
+      fit_cad    = fit_y
+    )
+  }))
+}
+
+markers_df <- filtered_df %>%
+  group_by(pace_panel) %>%
+  group_modify(~ build_bin_markers(.x, n_time_bins)) %>%
+  ungroup()
+
+cat(sprintf("Built %d cadence markers across 4 panels.\n", nrow(markers_df)))
+
 # generate 2x2 faceted ggplot
 cat("Generating 2x2 cadence plot...\n")
 
@@ -106,16 +149,23 @@ panel_colors <- c(
 
 p <- ggplot(plot_df, aes(x = date, y = avg_cadence, color = pace_panel)) +
   # vertical marker: April 25
-  geom_vline(xintercept = as.numeric(marker_date),
+  geom_vline(xintercept = marker_date,
              color = "#27AE60", linewidth = 0.9, linetype = "solid") +
-  # points
-  geom_point(alpha = 0.70, size = 2.0) +
+  # scatter points (downsampled)
+  geom_point(alpha = 0.55, size = 1.8) +
   # LOESS trend per panel
   geom_smooth(method = "loess", se = FALSE, linewidth = 0.9,
               linetype = "dashed", color = "gray25") +
+  # bin-average markers: filled circle sitting ON the fit line
+  geom_point(data = markers_df,
+             aes(x = mid_date, y = fit_cad, color = pace_panel),
+             size = 5, shape = 21, fill = "white", stroke = 1.5) +
+  # bin-average cadence label (observed mean) inside the circle
+  geom_text(data = markers_df,
+            aes(x = mid_date, y = fit_cad, label = mean_cad),
+            color = "gray15", size = 2.8, fontface = "bold") +
   # color scale
   scale_color_manual(values = panel_colors, guide = "none") +
-  # April 25 label (drawn once via annotate on a fixed panel — use facet trick)
   # split into 2 columns, 2 rows
   facet_wrap(~pace_panel, ncol = 2, scales = "free_y") +
   labs(
@@ -123,7 +173,7 @@ p <- ggplot(plot_df, aes(x = date, y = avg_cadence, color = pace_panel)) +
     subtitle = sprintf("Segments with incline in [%.1f°, %.1f°], split by pace range", min_incline, max_incline),
     x        = "Date",
     y        = "Average Cadence (SPM)",
-    caption  = "Green line = April 25  •  Dashed = LOESS trend  •  Data: all_segments.csv"
+    caption  = "Green line = April 25  •  Dashed = LOESS trend  •  Circled numbers = mean cadence per time bin  •  Data: all_segments.csv"
   ) +
   theme_minimal(base_size = 12) +
   theme(
