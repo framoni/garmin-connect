@@ -7,6 +7,18 @@ from garminconnect import Garmin
 
 from pull_activities import email, get_runs, password
 
+CSV_HEADER = [
+    "date",
+    "distance_m",
+    "incline_deg",
+    "avg_cadence",
+    "avg_hr",
+    "avg_pace_min_km",
+    "avg_vertical_oscillation",
+    "avg_ground_contact_balance_left",
+    "avg_ground_contact_balance_right",
+]
+
 
 def parse_metrics(details: dict) -> list[dict]:
     """Parses detailed metrics from Garmin activity details JSON."""
@@ -35,7 +47,7 @@ def parse_metrics(details: dict) -> list[dict]:
 
 def extract_segments_from_activity(
     points: list[dict], segment_len: float, tolerance: float
-):
+) -> list[dict[str, Any]]:
     """
     Finds non-overlapping segments of a specific distance where the incline
     is almost constant.
@@ -111,6 +123,31 @@ def extract_segments_from_activity(
                 if p.get("directSpeed") is not None and p["directSpeed"] > 0
             ]
 
+            vertical_oscs = [
+                p["directVerticalOscillation"]
+                if p.get("directVerticalOscillation") is not None
+                else p["verticalOscillation"]
+                for p in seg_points
+                if p.get("directVerticalOscillation") is not None
+                or p.get("verticalOscillation") is not None
+            ]
+
+            left_balances = []
+            right_balances = []
+            for p in seg_points:
+                if p.get("directGroundContactBalanceLeft") is not None:
+                    l_val = p["directGroundContactBalanceLeft"]
+                    left_balances.append(l_val)
+                    right_balances.append(100.0 - l_val)
+                elif p.get("directGroundContactBalanceRight") is not None:
+                    r_val = p["directGroundContactBalanceRight"]
+                    right_balances.append(r_val)
+                    left_balances.append(100.0 - r_val)
+                elif p.get("directGroundContactBalance") is not None:
+                    l_val = p["directGroundContactBalance"]
+                    left_balances.append(l_val)
+                    right_balances.append(100.0 - l_val)
+
             avg_cadence = round(sum(cadences) / len(cadences)) if cadences else 0
             avg_hr = round(sum(hrs) / len(hrs)) if hrs else 0
             avg_speed = sum(speeds) / len(speeds) if speeds else 0
@@ -120,6 +157,22 @@ def extract_segments_from_activity(
 
             incline_deg = round(math.degrees(math.atan(incline)), 2)
 
+            avg_vo = (
+                round(sum(vertical_oscs) / len(vertical_oscs), 2)
+                if vertical_oscs
+                else None
+            )
+            avg_bal_l = (
+                round(sum(left_balances) / len(left_balances), 2)
+                if left_balances
+                else None
+            )
+            avg_bal_r = (
+                round(sum(right_balances) / len(right_balances), 2)
+                if right_balances
+                else None
+            )
+
             segments.append(
                 {
                     "distance": round(actual_dist),
@@ -127,6 +180,9 @@ def extract_segments_from_activity(
                     "avg_cadence": avg_cadence,
                     "avg_hr": avg_hr,
                     "avg_pace": avg_pace,
+                    "avg_vertical_oscillation": avg_vo,
+                    "avg_ground_contact_balance_left": avg_bal_l,
+                    "avg_ground_contact_balance_right": avg_bal_r,
                 }
             )
             # Non-overlapping: jump to the end of the current segment
@@ -137,14 +193,117 @@ def extract_segments_from_activity(
     return segments
 
 
+def load_segments_from_csv(filename: str) -> list[tuple] | None:
+    """Loads segments from an existing CSV file if it contains up-to-date columns."""
+    data_dir = "data"
+    filepath = os.path.join(data_dir, filename)
+    if not os.path.exists(filepath):
+        return None
+
+    try:
+        with open(filepath, mode="r", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return None
+
+            required_cols = {
+                "date",
+                "distance_m",
+                "incline_deg",
+                "avg_cadence",
+                "avg_hr",
+                "avg_pace_min_km",
+                "avg_vertical_oscillation",
+                "avg_ground_contact_balance_left",
+                "avg_ground_contact_balance_right",
+            }
+            if not required_cols.issubset(set(header)):
+                return None
+
+            col_indices = {col: idx for idx, col in enumerate(header)}
+            rows = []
+            for row in reader:
+                if not row or len(row) < len(required_cols):
+                    continue
+                date = row[col_indices["date"]]
+                dist = (
+                    int(row[col_indices["distance_m"]])
+                    if row[col_indices["distance_m"]]
+                    else 0
+                )
+                incl = (
+                    float(row[col_indices["incline_deg"]])
+                    if row[col_indices["incline_deg"]]
+                    else 0.0
+                )
+                cad = (
+                    float(row[col_indices["avg_cadence"]])
+                    if row[col_indices["avg_cadence"]]
+                    else 0.0
+                )
+                hr = (
+                    int(row[col_indices["avg_hr"]]) if row[col_indices["avg_hr"]] else 0
+                )
+                pace = (
+                    float(row[col_indices["avg_pace_min_km"]])
+                    if row[col_indices["avg_pace_min_km"]]
+                    else 0.0
+                )
+
+                vo_raw = row[col_indices["avg_vertical_oscillation"]]
+                vo = float(vo_raw) if vo_raw != "" else None
+
+                bal_l_raw = row[col_indices["avg_ground_contact_balance_left"]]
+                bal_l = float(bal_l_raw) if bal_l_raw != "" else None
+
+                bal_r_raw = row[col_indices["avg_ground_contact_balance_right"]]
+                bal_r = float(bal_r_raw) if bal_r_raw != "" else None
+
+                rows.append((date, dist, incl, cad, hr, pace, vo, bal_l, bal_r))
+            return rows
+    except Exception as e:
+        print(f"  Warning: failed to read cached {filepath}: {e}")
+        return None
+
+
+def save_to_csv(data: list[tuple], filename: str):
+    """Saves the segments to a CSV file in the data/ folder."""
+    data_dir = "data"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    filepath = os.path.join(data_dir, filename)
+
+    with open(filepath, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_HEADER)
+        for r in data:
+            formatted_row = [
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                r[4],
+                r[5],
+                r[6] if r[6] is not None else "",
+                r[7] if r[7] is not None else "",
+                r[8] if r[8] is not None else "",
+            ]
+            writer.writerow(formatted_row)
+    print(f"  Saved to {filepath}")
+
+
 def main(
     activities_list: list[dict] | None = None,
     segment_dist: float = 100.0,
     tolerance: float = 0.005,
+    force_refresh: bool = False,
 ):
     """
     Main entry point to process activities and extract segments.
-    Returns a list of tuples: (date, distance, incline, avg_cadence, avg_hr, avg_pace)
+    Returns a list of tuples:
+    (date, distance, incline, avg_cadence, avg_hr, avg_pace, avg_vertical_oscillation, avg_bal_l, avg_bal_r)
     """
     if not email or not password:
         print("Error: Garmin credentials not found. Check your .env file.")
@@ -159,18 +318,33 @@ def main(
         print("No activities to process.")
         return []
 
-    client = Garmin(email, password)
-    print("Logging in to get detailed metrics...")
-    client.login()
-
+    client: Garmin | None = None
     all_segments = []
-    for run in activities_list:
+    total_activities = len(activities_list)
+
+    for idx, run in enumerate(activities_list, start=1):
         activity_id = run.get("activityId")
         date = run.get("startTimeLocal")
         if not activity_id:
             continue
 
-        print(f"Processing activity {activity_id} ({date})...")
+        filename = f"activity_{activity_id}_segments.csv"
+
+        if not force_refresh:
+            cached_segments = load_segments_from_csv(filename)
+            if cached_segments is not None:
+                print(
+                    f"[{idx}/{total_activities}] Activity {activity_id} ({date}) already processed ({len(cached_segments)} segments)."
+                )
+                all_segments.extend(cached_segments)
+                continue
+
+        print(f"[{idx}/{total_activities}] Pulling activity {activity_id} ({date})...")
+        if client is None:
+            client = Garmin(email, password)
+            print("Logging in to get detailed metrics...")
+            client.login()
+
         try:
             details = client.get_activity_details(activity_id)
             points = parse_metrics(details)
@@ -185,13 +359,14 @@ def main(
                     s["avg_cadence"],
                     s["avg_hr"],
                     s["avg_pace"],
+                    s["avg_vertical_oscillation"],
+                    s["avg_ground_contact_balance_left"],
+                    s["avg_ground_contact_balance_right"],
                 )
                 all_segments.append(res)
                 activity_segments.append(res)
 
-            if activity_segments:
-                save_to_csv(activity_segments, f"activity_{activity_id}_segments.csv")
-
+            save_to_csv(activity_segments, filename)
             print(f"  Found {len(segments)} segments.")
         except Exception as e:
             print(f"  Error processing activity {activity_id}: {e}")
@@ -202,41 +377,21 @@ def main(
     return all_segments
 
 
-def save_to_csv(data: list[tuple], filename: str):
-    """Saves the segments to a CSV file in the data/ folder."""
-    data_dir = "data"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-
-    filepath = os.path.join(data_dir, filename)
-    header = [
-        "date",
-        "distance_m",
-        "incline_deg",
-        "avg_cadence",
-        "avg_hr",
-        "avg_pace_min_km",
-    ]
-
-    with open(filepath, mode="w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows(data)
-    print(f"  Saved to {filepath}")
-
-
 if __name__ == "__main__":
     # Parameters: 100m segments, 0.5% incline tolerance
     results = main(segment_dist=100.0, tolerance=0.005)
 
     if results:
-        print("\n" + "=" * 85)
+        print("\n" + "=" * 125)
         print(
-            f"{'Date':<20} | {'Dist':<7} | {'Incline':<8} | {'Cadence':<8} | {'HR':<6} | {'Pace (min/km)':<12}"
+            f"{'Date':<20} | {'Dist':<7} | {'Incline':<8} | {'Cadence':<8} | {'HR':<6} | {'Pace (min/km)':<14} | {'Vert Osc':<9} | {'L Bal':<7} | {'R Bal':<7}"
         )
-        print("-" * 85)
-        for r in results:
-            date, dist, incl, cad, hr, pace = r
+        print("-" * 125)
+        for r in results[:20]:
+            date, dist, incl, cad, hr, pace, vo, bal_l, bal_r = r
+            vo_str = f"{vo:.2f} cm" if vo is not None else "N/A"
+            bal_l_str = f"{bal_l:.1f}%" if bal_l is not None else "N/A"
+            bal_r_str = f"{bal_r:.1f}%" if bal_r is not None else "N/A"
             print(
-                f"{date[:19]:<20} | {dist:>6d}m | {incl:>6.2f}° | {cad:>8.1f} | {hr:>6d} | {pace:>12.2f}"
+                f"{str(date)[:19]:<20} | {dist:>6d}m | {incl:>6.2f}° | {cad:>8.1f} | {hr:>6d} | {pace:>14.2f} | {vo_str:>9} | {bal_l_str:>7} | {bal_r_str:>7}"
             )
