@@ -1,4 +1,4 @@
-# Running Dynamics Analysis (Cadence, Vertical Oscillation, Right Foot Balance)
+# Running Dynamics Analysis (Cadence, Vertical Oscillation, Right Foot Balance, Vertical Ratio)
 
 # Analyzes running metrics over time filtered by segment incline,
 # split into 2x2 facets by fixed pace ranges, colored accordingly
@@ -14,13 +14,21 @@ library(readr)
 
 # configuration parameters
 csv_file           <- "data/all_segments.csv"
-cadence_output_img <- "cadence_analysis.png"
-vo_output_img      <- "vertical_oscillation_analysis.png"
-balance_output_img <- "right_balance_analysis.png"
+# filter by data source: if TRUE, only include segments recorded with an HR strap / RD pod
+# (identified by the presence of ground contact balance metrics)
+if (!exists("strap_only")) {
+  strap_only <- FALSE
+}
 
 # incline range filter (in degrees)
 min_incline     <- -2.0
 max_incline     <-  2.0
+
+suffix             <- if (strap_only) "_strap_only.png" else ".png"
+cadence_output_img <- paste0("cadence_analysis", suffix)
+vo_output_img      <- paste0("vertical_oscillation_analysis", suffix)
+balance_output_img <- paste0("right_balance_analysis", suffix)
+vr_output_img      <- paste0("vertical_ratio_analysis", suffix)
 
 # vertical marker date
 marker_date     <- as.POSIXct("2026-04-25", tz = "UTC")
@@ -109,8 +117,9 @@ generate_analysis_plot <- function(
 ) {
   cat(sprintf("\n=== Generating plot for: %s ===\n", metric_col))
 
-  # filter: incline, valid values, year 2026 only
-  cat(sprintf("Filtering segments: incline [%.1f°, %.1f°], year 2026...\n", min_incline, max_incline))
+  # filter: incline, valid values, year 2026 only, and optional strap_only
+  cat(sprintf("Filtering segments: incline [%.1f°, %.1f°], year 2026%s...\n",
+              min_incline, max_incline, if (strap_only) ", HR strap only" else ""))
   filtered_df <- df %>%
     filter(
       !is.na(incline_deg),
@@ -118,7 +127,12 @@ generate_analysis_plot <- function(
       incline_deg <= max_incline,
       valid_filter(.data[[metric_col]]),
       avg_pace_min_km > 0,
-      format(date, "%Y") == "2026"
+      format(date, "%Y") == "2026",
+      if (strap_only) {
+        !is.na(avg_ground_contact_balance_right) & avg_ground_contact_balance_right > 0
+      } else {
+        TRUE
+      }
     )
 
   cat(sprintf("Retained %d segments out of %d total.\n", nrow(filtered_df), nrow(df)))
@@ -152,6 +166,12 @@ generate_analysis_plot <- function(
 
   cat(sprintf("Built %d summary markers across panels.\n", nrow(markers_df)))
 
+  subtitle_text <- sprintf(
+    "Segments with incline in [%.1f°, %.1f°], split by pace range%s",
+    min_incline, max_incline,
+    if (strap_only) " (HR strap / RD pod only)" else ""
+  )
+
   p <- ggplot(plot_df, aes(x = date, y = .data[[metric_col]], color = pace_panel)) +
     # vertical marker: April 25
     geom_vline(xintercept = marker_date,
@@ -167,15 +187,15 @@ generate_analysis_plot <- function(
                size = 5.5, shape = 21, fill = "white", stroke = 1.5) +
     # bin-average label (observed mean) inside the circle
     geom_text(data = markers_df,
-              aes(x = mid_date, y = fit_val, label = label_val),
-              color = "gray15", size = 2.6, fontface = "bold") +
+               aes(x = mid_date, y = fit_val, label = label_val),
+               color = "gray15", size = 2.6, fontface = "bold") +
     # color scale
     scale_color_manual(values = panel_colors, guide = "none") +
     # split into 2 columns, 2 rows
     facet_wrap(~pace_panel, ncol = 2, scales = "free_y") +
     labs(
       title    = title_text,
-      subtitle = sprintf("Segments with incline in [%.1f°, %.1f°], split by pace range", min_incline, max_incline),
+      subtitle = subtitle_text,
       x        = "Date",
       y        = y_label,
       caption  = caption_text
@@ -250,4 +270,21 @@ if ("avg_ground_contact_balance_right" %in% names(df)) {
 } else {
   cat("\nColumn 'avg_ground_contact_balance_right' not found in CSV. Skipping right foot balance plot.\n")
 }
+
+# 4. Vertical Ratio plot
+if ("avg_vertical_ratio" %in% names(df)) {
+  generate_analysis_plot(
+    df              = df,
+    metric_col      = "avg_vertical_ratio",
+    y_label         = "Average Vertical Ratio (%)",
+    title_text      = "Vertical Ratio vs. Date — 2026",
+    caption_text    = "Green line = April 25  •  Dashed = LOESS trend  •  Circled numbers = mean vertical ratio (%) per time bin  •  Data: all_segments.csv",
+    output_img      = vr_output_img,
+    format_fn       = function(val) sprintf("%.1f", val),
+    valid_filter    = function(x) !is.na(x) & x > 0
+  )
+} else {
+  cat("\nColumn 'avg_vertical_ratio' not found in CSV. Skipping vertical ratio plot.\n")
+}
+
 

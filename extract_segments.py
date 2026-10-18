@@ -17,6 +17,7 @@ CSV_HEADER = [
     "avg_vertical_oscillation",
     "avg_ground_contact_balance_left",
     "avg_ground_contact_balance_right",
+    "avg_vertical_ratio",
 ]
 
 
@@ -173,6 +174,16 @@ def extract_segments_from_activity(
                 else None
             )
 
+            # Vertical Ratio (%) = (VO / Stride Length) * 100
+            # Stride length (m) = speed (m/s) / (cadence / 60)
+            # VO is in cm. Stride length in cm = stride length (m) * 100.
+            # VR (%) = (VO_cm / (stride_len_m * 100)) * 100 = VO_cm / stride_len_m
+            # stride_len_m = 1000 / (avg_pace * avg_cadence)
+            # Therefore VR (%) = avg_vo * avg_pace * avg_cadence / 1000
+            avg_vr = None
+            if avg_vo is not None and avg_cadence > 0 and avg_pace > 0:
+                avg_vr = round((avg_vo * avg_pace * avg_cadence) / 1000.0, 2)
+
             segments.append(
                 {
                     "distance": round(actual_dist),
@@ -183,6 +194,7 @@ def extract_segments_from_activity(
                     "avg_vertical_oscillation": avg_vo,
                     "avg_ground_contact_balance_left": avg_bal_l,
                     "avg_ground_contact_balance_right": avg_bal_r,
+                    "avg_vertical_ratio": avg_vr,
                 }
             )
             # Non-overlapping: jump to the end of the current segment
@@ -260,7 +272,17 @@ def load_segments_from_csv(filename: str) -> list[tuple] | None:
                 bal_r_raw = row[col_indices["avg_ground_contact_balance_right"]]
                 bal_r = float(bal_r_raw) if bal_r_raw != "" else None
 
-                rows.append((date, dist, incl, cad, hr, pace, vo, bal_l, bal_r))
+                if "avg_vertical_ratio" in col_indices and col_indices[
+                    "avg_vertical_ratio"
+                ] < len(row):
+                    vr_raw = row[col_indices["avg_vertical_ratio"]]
+                    vr = float(vr_raw) if vr_raw != "" else None
+                elif vo is not None and cad > 0 and pace > 0:
+                    vr = round((vo * pace * cad) / 1000.0, 2)
+                else:
+                    vr = None
+
+                rows.append((date, dist, incl, cad, hr, pace, vo, bal_l, bal_r, vr))
             return rows
     except Exception as e:
         print(f"  Warning: failed to read cached {filepath}: {e}")
@@ -289,6 +311,7 @@ def save_to_csv(data: list[tuple], filename: str):
                 r[6] if r[6] is not None else "",
                 r[7] if r[7] is not None else "",
                 r[8] if r[8] is not None else "",
+                r[9] if len(r) > 9 and r[9] is not None else "",
             ]
             writer.writerow(formatted_row)
     print(f"  Saved to {filepath}")
@@ -362,6 +385,7 @@ def main(
                     s["avg_vertical_oscillation"],
                     s["avg_ground_contact_balance_left"],
                     s["avg_ground_contact_balance_right"],
+                    s["avg_vertical_ratio"],
                 )
                 all_segments.append(res)
                 activity_segments.append(res)
@@ -382,16 +406,17 @@ if __name__ == "__main__":
     results = main(segment_dist=100.0, tolerance=0.005)
 
     if results:
-        print("\n" + "=" * 125)
+        print("\n" + "=" * 138)
         print(
-            f"{'Date':<20} | {'Dist':<7} | {'Incline':<8} | {'Cadence':<8} | {'HR':<6} | {'Pace (min/km)':<14} | {'Vert Osc':<9} | {'L Bal':<7} | {'R Bal':<7}"
+            f"{'Date':<20} | {'Dist':<7} | {'Incline':<8} | {'Cadence':<8} | {'HR':<6} | {'Pace (min/km)':<14} | {'Vert Osc':<9} | {'L Bal':<7} | {'R Bal':<7} | {'Vert Ratio':<10}"
         )
-        print("-" * 125)
+        print("-" * 138)
         for r in results[:20]:
-            date, dist, incl, cad, hr, pace, vo, bal_l, bal_r = r
+            date, dist, incl, cad, hr, pace, vo, bal_l, bal_r, vr = r
             vo_str = f"{vo:.2f} cm" if vo is not None else "N/A"
             bal_l_str = f"{bal_l:.1f}%" if bal_l is not None else "N/A"
             bal_r_str = f"{bal_r:.1f}%" if bal_r is not None else "N/A"
+            vr_str = f"{vr:.2f}%" if vr is not None else "N/A"
             print(
-                f"{str(date)[:19]:<20} | {dist:>6d}m | {incl:>6.2f}° | {cad:>8.1f} | {hr:>6d} | {pace:>14.2f} | {vo_str:>9} | {bal_l_str:>7} | {bal_r_str:>7}"
+                f"{str(date)[:19]:<20} | {dist:>6d}m | {incl:>6.2f}° | {cad:>8.1f} | {hr:>6d} | {pace:>14.2f} | {vo_str:>9} | {bal_l_str:>7} | {bal_r_str:>7} | {vr_str:>10}"
             )

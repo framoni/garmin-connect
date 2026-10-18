@@ -22,4 +22,7 @@ Then create a virtual environment managed by uv
 
 - `cadence_analysis.png`: Study on how average running cadence evolves over time
 - `vertical_oscillation_analysis.png`: Vertical oscillation (bounce in cm) trends over time
-- `right_balance_analysis.png`: Ground contact balance percentage for the right foot over time 
+- `right_balance_analysis.png`: Ground contact balance percentage for the right foot over time
+- `vertical_ratio_analysis.png`: Vertical ratio (bounce relative to stride length %) tracking running economy and forward efficiency over time
+
+Set `strap_only <- TRUE` in [cadence_analysis.R](file:///home/framoni/Projects/garmin-connect/cadence_analysis.R) (or override it via R environment) to filter out runs recorded with only the watch and restrict the analysis strictly to runs recorded with an HR chest strap / RD pod.

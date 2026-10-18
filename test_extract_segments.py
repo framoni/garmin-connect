@@ -106,6 +106,9 @@ class TestExtractSegments(unittest.TestCase):
         self.assertAlmostEqual(seg["avg_ground_contact_balance_left"], 49.0, places=2)
         # Right Balance avg = (51.0 + 51.5 + 50.5) / 3 = 51.0%
         self.assertAlmostEqual(seg["avg_ground_contact_balance_right"], 51.0, places=2)
+        # Cadence avg = 162.0, speed = 3.0 m/s -> pace = (1000/60)/3.0 = 5.5555... min/km
+        # Vertical Ratio = 10.0 * 5.5555... * 162.0 / 1000 = 9.0%
+        self.assertAlmostEqual(seg["avg_vertical_ratio"], 9.0, places=2)
 
     def test_missing_dynamics_returns_none(self):
         # Mock activity without running dynamics metrics
@@ -133,6 +136,7 @@ class TestExtractSegments(unittest.TestCase):
         self.assertIsNone(seg["avg_vertical_oscillation"])
         self.assertIsNone(seg["avg_ground_contact_balance_left"])
         self.assertIsNone(seg["avg_ground_contact_balance_right"])
+        self.assertIsNone(seg["avg_vertical_ratio"])
 
 
 if __name__ == "__main__":
