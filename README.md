@@ -26,3 +26,11 @@ Then create a virtual environment managed by uv
 - `vertical_ratio_analysis.png`: Vertical ratio (bounce relative to stride length %) tracking running economy and forward efficiency over time
 
 Set `strap_only <- TRUE` in [cadence_analysis.R](file:///home/framoni/Projects/garmin-connect/cadence_analysis.R) (or override it via R environment) to filter out runs recorded with only the watch and restrict the analysis strictly to runs recorded with an HR chest strap / RD pod.
+
+### Device Reliability & Hypothesis Testing
+
+`test_device_reliability.R` performs Welch's Two-Sample t-tests, variance ratio F-tests, and pace-stratified comparisons between Chest Strap and Wrist-Only recordings, generating `device_comparison_test.png`. Run with:
+
+```bash
+Rscript test_device_reliability.R
+```
